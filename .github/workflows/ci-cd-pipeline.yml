@@ -1,92 +1,43 @@
-name: Pipeline CI/CD pour RabbitMQProduct
+name: Pipeline
 
 on:
   push:
     branches:
       - develop
-  pull_request:
-    branches:
-      - develop
+  workflow_dispatch:
 
 jobs:
-  build-and-test:
-    name: Compilation et Tests
+  build:
     runs-on: ubuntu-latest
+    env:
+      PROJECT_FOLDER: "RabbitMqProductAPI"
+      PROJECT_NAME: "RabbitMqProductAPI"
+      DOTNET_VERSION: "9.x"
+      DOTNET_EF_VERSION: "9.0.1"
 
     steps:
-      - name: Récupération du dépôt
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Configuration de .NET
+      - name: Set up .NET Core
         uses: actions/setup-dotnet@v3
         with:
-          dotnet-version: '9.0'
+          dotnet-version: ${{env.DOTNET_VERSION}}
+          cache: true
 
-      - name: Restauration des dépendances
-        run: dotnet restore RabbitMqProductAPI.sln
+      - name: Build with dotnet
+        run: dotnet build --configuration Release
 
-      - name: Compilation de la solution
-        run: dotnet build RabbitMqProductAPI.sln --no-restore --configuration Release
+      - name: dotnet publish
+        run: dotnet publish -c Release -o ${{env.PROJECT_FOLDER}}/myapp
 
-      - name: Exécution des tests unitaires
-        run: dotnet test RabbitMqProductAPI.sln --no-build --verbosity normal
+      - name: install dotnet ef
+        run: dotnet tool install -g dotnet-ef --version ${{env.DOTNET_EF_VERSION}}
 
-      - name: Validation des migrations EF Core
-        run: |
-          cd RabbitMqProductAPI
-          dotnet ef migrations script --idempotent --output migrations-check.sql
-        env:
-          DOTNET_ENVIRONMENT: Development
-          ConnectionStrings__Default: "Server=localhost;Database=test_db;User Id=sa;Password=YourPassword123;"
+      - name: dotnet bundle migration
+        run: dotnet ef migrations bundle --runtime linux-x64 -p ${{env.PROJECT_FOLDER}}/${{env.PROJECT_NAME}}.csproj -o ${{env.PROJECT_FOLDER}}/myapp/migrate
 
-  docker-build-and-push:
-    name: Construction et Publication des Images Docker
-    runs-on: ubuntu-latest
-    needs: build-and-test
-
-    steps:
-      - name: Récupération du dépôt
-        uses: actions/checkout@v3
-
-      - name: Connexion à Docker Hub
-        uses: docker/login-action@v2
+      - name: Upload artifact for deployment job
+        uses: actions/upload-artifact@v4
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Construction et publication de l'image Docker de l'API
-        run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/rabbitmq-product-api:develop -f RabbitMqProductAPI/Dockerfile .
-          docker push ${{ secrets.DOCKER_USERNAME }}/rabbitmq-product-api:develop
-
-      - name: Construction et publication de l'image Docker de la Console
-        run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/rabbitmq-product-console:develop -f RabbitMQProduct.ConsoleApplication/Dockerfile .
-          docker push ${{ secrets.DOCKER_USERNAME }}/rabbitmq-product-console:develop
-
-  deploy:
-    name: Déploiement sur Kubernetes
-    runs-on: ubuntu-latest
-    needs: docker-build-and-push
-
-    steps:
-      - name: Récupération du dépôt
-        uses: actions/checkout@v3
-
-      - name: Installation de kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'latest'
-
-      - name: Installation de Helm
-        uses: azure/setup-helm@v3
-        with:
-          version: 'latest'
-
-      - name: Déploiement avec Helm
-        run: |
-          helm upgrade --install pubsub ./helm/pubsub \
-            --set imageApi.repository=${{ secrets.DOCKER_USERNAME }}/rabbitmq-product-api \
-            --set imageConsole.repository=${{ secrets.DOCKER_USERNAME }}/rabbitmq-product-console \
-            --namespace pubsub \
-            --create-namespace
+          name: .net-app
+          path: ${{env.PROJECT_FOLDER}}/myapp
